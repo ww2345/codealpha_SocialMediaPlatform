@@ -1,1 +1,1 @@
-this is to see how branch works in git 
+checking of things to solve conflicts 
