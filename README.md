@@ -8,7 +8,7 @@ This archive contains a starter fullstack project:
 
 **Important**
 - `node_modules` are intentionally excluded. Run `npm install` in both `backend` and `frontend`.
-- Database name: **socialgram**
+- Database name: MongoDB
 - Collections (MongoDB): **users**, **friendrequests**, **messages**
 
 See `backend/.env.example` for env variables.
