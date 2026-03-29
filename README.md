@@ -15,6 +15,8 @@ What you can do today:
 - Collections: `users`, `friendrequests`, `messages`
 - Backend env: `backend/.env.example` → `backend/.env`
 - Frontend env: `.env.example` → `frontend/.env`
+- The backend can serve the built frontend in production, so Render can run this as one web service
+- Uploaded images live on the server filesystem unless you attach a Render disk or use cloud storage
 
 ## Tech Stack
 - **Backend:** Node.js, Express, MongoDB, Mongoose, Socket.IO, JWT, bcrypt
@@ -35,6 +37,28 @@ Prereqs: Node.js + npm, MongoDB running locally (or a MongoDB URI).
   - `cp ../.env.example .env`
 - `npm install`
 - `npm run dev` (defaults to `http://localhost:5173`)
+
+## Render Deployment
+This repo is set up for the simplest Render flow: one Node web service that serves both the API and the built React app.
+
+1. Create a MongoDB Atlas cluster, database user, and connection string.
+2. Push the repo to GitHub.
+3. In Render, create a new Blueprint from this repo so it reads `render.yaml`.
+4. Set your Render environment variables:
+   - `MONGO_URI`: your MongoDB Atlas URI
+   - `JWT_SECRET`: a long random secret
+   - `CLIENT_URL`: optional; only needed if you split frontend and backend onto different domains
+   - `UPLOAD_DIR`: optional; change this to your Render disk mount path if you add persistent storage
+5. Deploy. Render will install both apps, build the Vite frontend, and start Express on the backend service.
+
+Health check endpoint: `GET /health`
+
+### Upload persistence
+SocialGram currently stores uploaded images on the local filesystem. On Render, those files are ephemeral unless you attach a persistent disk.
+
+If you want uploads to survive redeploys, do one of these:
+- attach a Render disk and set `UPLOAD_DIR` to the disk mount path
+- move media storage to a service like Cloudinary or S3
 
 ## API Documentation
 Base URL (dev): `http://localhost:4000`  

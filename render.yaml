@@ -1,0 +1,25 @@
+services:
+  - type: web
+    name: socialgram
+    runtime: node
+    plan: free
+    buildCommand: npm ci --prefix backend && npm ci --prefix frontend && npm run build --prefix frontend
+    startCommand: npm start --prefix backend
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: MONGO_URI
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+      - key: CLIENT_URL
+        sync: false
+      - key: UPLOAD_DIR
+        value: /opt/render/project/src/backend/uploads
+    buildFilter:
+      paths:
+        - backend/**
+        - frontend/**
+        - render.yaml
+        - .node-version

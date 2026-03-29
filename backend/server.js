@@ -17,24 +17,101 @@ const Post = require('./models/Post');
 
 const app = express();
 const server = http.createServer(app);
+const isProduction = process.env.NODE_ENV === 'production';
+const PORT = Number(process.env.PORT) || 4000;
+const mongoUri =
+  process.env.MONGO_URI?.trim() ||
+  (isProduction ? '' : 'mongodb://127.0.0.1:27017/socialgram');
+const jwtSecret =
+  process.env.JWT_SECRET?.trim() ||
+  (isProduction ? '' : 'change_this');
+const clientUrls = (process.env.CLIENT_URL || '')
+  .split(',')
+  .map((value) => value.trim().replace(/\/$/, ''))
+  .filter(Boolean);
+const uploadDir = path.resolve(__dirname, process.env.UPLOAD_DIR?.trim() || 'uploads');
+const frontendDistDir = path.resolve(__dirname, '../frontend/dist');
+const frontendIndexFile = path.join(frontendDistDir, 'index.html');
 
-// ✅ Use CLIENT_URL from .env (important for deployment)
-const io = new Server(server, {
-  cors: {
-    origin: process.env.CLIENT_URL || '*',
-    methods: ["GET", "POST"],
-  },
-});
+if (!mongoUri) {
+  throw new Error('MONGO_URI is required in production');
+}
 
+if (!jwtSecret) {
+  throw new Error('JWT_SECRET is required in production');
+}
+
+if (isProduction && jwtSecret === 'change_this') {
+  throw new Error('JWT_SECRET must be set to a strong value in production');
+}
+
+function normalizeOrigin(origin) {
+  return String(origin || '').trim().replace(/\/$/, '');
+}
+
+function isLocalDevOrigin(origin) {
+  try {
+    const { hostname } = new URL(origin);
+    return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1';
+  } catch (e) {
+    return false;
+  }
+}
+
+function isAllowedOrigin(origin, sameOrigin) {
+  if (!origin) return true;
+  const normalized = normalizeOrigin(origin);
+  if (sameOrigin && normalized === sameOrigin) return true;
+  if (clientUrls.includes(normalized)) return true;
+  if (!isProduction && isLocalDevOrigin(normalized)) return true;
+  return clientUrls.length === 0;
+}
+
+function corsOrigin(origin, callback) {
+  if (isAllowedOrigin(origin)) return callback(null, true);
+  return callback(new Error('Not allowed by CORS'));
+}
+
+function apiCorsOptions(req, callback) {
+  const requestOrigin = normalizeOrigin(`${req.protocol}://${req.get('host')}`);
+  const origin = req.header('Origin');
+
+  if (isAllowedOrigin(origin, requestOrigin)) {
+    return callback(null, {
+      origin: true,
+      credentials: true,
+    });
+  }
+
+  return callback(new Error('Not allowed by CORS'));
+}
+
+const corsOptions =
+  clientUrls.length > 0 || !isProduction
+    ? {
+        origin: corsOrigin,
+        credentials: true,
+      }
+    : null;
+
+const io = new Server(
+  server,
+  corsOptions
+    ? {
+        cors: {
+          origin: corsOrigin,
+          methods: ['GET', 'POST'],
+          credentials: true,
+        },
+      }
+    : undefined
+);
+
+app.set('trust proxy', 1);
 app.use(express.json());
 
-// ✅ Use dynamic CORS instead of always '*'
-app.use(cors({
-  origin: process.env.CLIENT_URL || '*',
-  credentials: true,
-}));
+app.use('/api', cors(apiCorsOptions));
 
-const uploadDir = path.join(__dirname, 'uploads');
 if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
 
 const storage = multer.diskStorage({
@@ -67,38 +144,17 @@ function uploadImage(req, res, next) {
 
 app.use('/uploads', express.static(uploadDir));
 
-// ✅ Environment vars
-const PORT = process.env.PORT || 4000;
-const JWT_SECRET = process.env.JWT_SECRET || 'change_this';
-
-// ✅ MongoDB Connection
-mongoose.connect(process.env.MONGO_URI || 'mongodb://127.0.0.1:27017/socialgram', {
-  useNewUrlParser: true,
-  useUnifiedTopology: true,
-})
-.then(() => console.log('✅ MongoDB Connected'))
-.catch((err) => console.error('❌ MongoDB Error:', err));
-
 // 🔐 Auth Middleware
 function auth(req, res, next) {
   const token = req.headers.authorization?.split(' ')[1];
   if (!token) return res.status(401).json({ error: 'No token' });
   try {
-    const payload = jwt.verify(token, JWT_SECRET);
+    const payload = jwt.verify(token, jwtSecret);
     req.user = payload;
     next();
   } catch (e) {
     return res.status(401).json({ error: 'Invalid token' });
   }
-}
-
-function safeUnlinkUpload(imageUrl) {
-  if (!imageUrl || typeof imageUrl !== 'string' || !imageUrl.startsWith('/uploads/')) return;
-  const name = path.basename(imageUrl);
-  if (!name || name === '.' || name === '..') return;
-  const full = path.join(uploadDir, name);
-  if (!full.startsWith(path.resolve(uploadDir))) return;
-  fs.unlink(full, () => {});
 }
 
 function safeUnlinkUpload(imageUrl) {
@@ -109,6 +165,10 @@ function safeUnlinkUpload(imageUrl) {
   if (!full.startsWith(path.resolve(uploadDir))) return;
   fs.unlink(full, () => {});
 }
+
+app.get('/health', (_req, res) => {
+  res.json({ ok: true });
+});
 
 // 🧾 Routes (Auth, Friends, Users, Messages)
 app.post('/api/auth/register', async (req, res) => {
@@ -121,7 +181,7 @@ app.post('/api/auth/register', async (req, res) => {
 
   const pw = await bcrypt.hash(password, 10);
   const user = await User.create({ username, email, passwordHash: pw });
-  const token = jwt.sign({ id: user._id, username: user.username }, JWT_SECRET);
+  const token = jwt.sign({ id: user._id, username: user.username }, jwtSecret);
   res.json({
     token,
     user: { id: user._id, username: user.username, email: user.email },
@@ -136,7 +196,7 @@ app.post('/api/auth/login', async (req, res) => {
   const ok = await bcrypt.compare(password, user.passwordHash);
   if (!ok) return res.status(400).json({ error: 'Invalid' });
 
-  const token = jwt.sign({ id: user._id, username: user.username }, JWT_SECRET);
+  const token = jwt.sign({ id: user._id, username: user.username }, jwtSecret);
   res.json({ token, user: { id: user._id, username: user.username } });
 });
 
@@ -430,7 +490,7 @@ io.use((socket, next) => {
   const token = socket.handshake.auth?.token;
   if (!token) return next(new Error('No token'));
   try {
-    const payload = jwt.verify(token, JWT_SECRET);
+    const payload = jwt.verify(token, jwtSecret);
     socket.user = payload;
     next();
   } catch (e) {
@@ -468,5 +528,46 @@ io.on('connection', (socket) => {
   });
 });
 
-// ✅ Start server
-server.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
+app.use('/api', (_req, res) => {
+  res.status(404).json({ error: 'Not found' });
+});
+
+if (fs.existsSync(frontendIndexFile)) {
+  app.use(express.static(frontendDistDir));
+
+  app.get('*', (req, res, next) => {
+    if (req.path.startsWith('/uploads/')) return next();
+    if (!req.accepts('html')) return next();
+    return res.sendFile(frontendIndexFile);
+  });
+}
+
+app.use((err, req, res, next) => {
+  if (!err) return next();
+  if (res.headersSent) return next(err);
+
+  if (err.message === 'Not allowed by CORS') {
+    return res.status(403).json({ error: 'Origin not allowed' });
+  }
+
+  console.error(err);
+
+  if (req.path.startsWith('/api')) {
+    return res.status(500).json({ error: 'Server error' });
+  }
+
+  return res.status(500).send('Server error');
+});
+
+async function startServer() {
+  try {
+    await mongoose.connect(mongoUri);
+    console.log('✅ MongoDB Connected');
+    server.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
+  } catch (err) {
+    console.error('❌ Startup error:', err);
+    process.exit(1);
+  }
+}
+
+startServer();
